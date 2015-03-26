@@ -72,6 +72,10 @@ const (
 	maxIdleConnsPerAddr = 2 // TODO(bradfitz): make this configurable?
 )
 
+type Logger interface {
+	Printf(format string, v ...interface{})
+}
+
 // resumableError returns true if err is only a protocol-level cache error.
 // This is used to determine whether or not a server connection should
 // be re-used or not. If an error occurs, by default we don't reuse the
@@ -135,8 +139,10 @@ type Client struct {
 
 	selector ServerSelector
 
-	lk       sync.Mutex
-	freeconn map[string][]*conn
+	logger    Logger
+	logPrefix string
+	lk        sync.Mutex
+	freeconn  map[string][]*conn
 }
 
 // Item is an item to be got or stored in a memcached server.
@@ -300,6 +306,10 @@ func (c *Client) FlushAll() error {
 // Get gets the item for the given key. ErrCacheMiss is returned for a
 // memcache cache miss. The key must be at most 250 bytes in length.
 func (c *Client) Get(key string) (item *Item, err error) {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "GET %s", key)
+	}
 	err = c.withKeyAddr(key, func(addr net.Addr) error {
 		return c.getFromAddr(addr, []string{key}, func(it *Item) { item = it })
 	})
@@ -314,6 +324,10 @@ func (c *Client) Get(key string) (item *Item, err error) {
 // into the future at which time the item will expire. ErrCacheMiss is returned if the
 // key is not in the cache. The key must be at most 250 bytes in length.
 func (c *Client) Touch(key string, seconds int32) (err error) {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "TOUCH %s %ds", key, seconds)
+	}
 	return c.withKeyAddr(key, func(addr net.Addr) error {
 		return c.touchFromAddr(addr, []string{key}, seconds)
 	})
@@ -414,6 +428,10 @@ func (c *Client) touchFromAddr(addr net.Addr, keys []string, expiration int32) e
 // cache misses. Each key must be at most 250 bytes in length.
 // If no error is returned, the returned map will also be non-nil.
 func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "GET %v", keys)
+	}
 	var lk sync.Mutex
 	m := make(map[string]*Item)
 	addItemToMap := func(it *Item) {
@@ -496,6 +514,10 @@ func scanGetResponseLine(line []byte, it *Item) (size int, err error) {
 
 // Set writes the given item, unconditionally.
 func (c *Client) Set(item *Item) error {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "SET %s", item.Key)
+	}
 	return c.onItem(item, (*Client).set)
 }
 
@@ -503,9 +525,24 @@ func (c *Client) set(rw *bufio.ReadWriter, item *Item) error {
 	return c.populateOne(rw, "set", item)
 }
 
+func (c *Client) TraceOn(prefix string, logger Logger) {
+	c.logPrefix = prefix
+	c.logger = logger
+}
+
+func (c *Client) trace(started time.Time, query string, args ...interface{}) {
+	if c.logger != nil {
+		c.logger.Printf("%s%s (%v)", c.logPrefix, fmt.Sprintf(query, args), (time.Now().Sub(started)))
+	}
+}
+
 // Add writes the given item, if no value already exists for its
 // key. ErrNotStored is returned if that condition is not met.
 func (c *Client) Add(item *Item) error {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "ADD %s", item.Key)
+	}
 	return c.onItem(item, (*Client).add)
 }
 
@@ -516,6 +553,10 @@ func (c *Client) add(rw *bufio.ReadWriter, item *Item) error {
 // Replace writes the given item, but only if the server *does*
 // already hold data for this key
 func (c *Client) Replace(item *Item) error {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "REPLACE %s", item.Key)
+	}
 	return c.onItem(item, (*Client).replace)
 }
 
@@ -531,6 +572,10 @@ func (c *Client) replace(rw *bufio.ReadWriter, item *Item) error {
 // calls. ErrNotStored is returned if the value was evicted in between
 // the calls.
 func (c *Client) CompareAndSwap(item *Item) error {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "CAS %s", item.Key)
+	}
 	return c.onItem(item, (*Client).cas)
 }
 
@@ -614,6 +659,10 @@ func writeExpectf(rw *bufio.ReadWriter, expect []byte, format string, args ...in
 // Delete deletes the item with the provided key. The error ErrCacheMiss is
 // returned if the item didn't already exist in the cache.
 func (c *Client) Delete(key string) error {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "DELETE %s", key)
+	}
 	return c.withKeyRw(key, func(rw *bufio.ReadWriter) error {
 		return writeExpectf(rw, resultDeleted, "delete %s\r\n", key)
 	})
@@ -621,6 +670,10 @@ func (c *Client) Delete(key string) error {
 
 // DeleteAll deletes all items in the cache.
 func (c *Client) DeleteAll() error {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "DELETE ALL KEYS")
+	}
 	return c.withKeyRw("", func(rw *bufio.ReadWriter) error {
 		return writeExpectf(rw, resultDeleted, "flush_all\r\n")
 	})
@@ -632,6 +685,10 @@ func (c *Client) DeleteAll() error {
 // memcached must be an decimal number, or an error will be returned.
 // On 64-bit overflow, the new value wraps around.
 func (c *Client) Increment(key string, delta uint64) (newValue uint64, err error) {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "INCR %s", key)
+	}
 	return c.incrDecr("incr", key, delta)
 }
 
@@ -642,6 +699,10 @@ func (c *Client) Increment(key string, delta uint64) (newValue uint64, err error
 // On underflow, the new value is capped at zero and does not wrap
 // around.
 func (c *Client) Decrement(key string, delta uint64) (newValue uint64, err error) {
+	if c.logger != nil {
+		now := time.Now()
+		defer c.trace(now, "DECR %s", key)
+	}
 	return c.incrDecr("decr", key, delta)
 }
 
