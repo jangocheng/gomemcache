@@ -68,8 +68,8 @@ var (
 const DefaultTimeout = 100 * time.Millisecond
 
 const (
-	buffered            = 8 // arbitrary buffered channel size, for readability
-	maxIdleConnsPerAddr = 2 // TODO(bradfitz): make this configurable?
+	buffered            = 8  // arbitrary buffered channel size, for readability
+	maxIdleConnsPerAddr = 20 // TODO(bradfitz): make this configurable?
 )
 
 type Logger interface {
