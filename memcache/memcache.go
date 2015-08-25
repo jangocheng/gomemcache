@@ -136,6 +136,8 @@ type Client struct {
 	// Timeout specifies the socket read/write timeout.
 	// If zero, DefaultTimeout is used.
 	Timeout time.Duration
+	//是否使用get 指令
+	UseGet bool
 
 	selector ServerSelector
 
@@ -361,7 +363,11 @@ func (c *Client) withKeyRw(key string, fn func(*bufio.ReadWriter) error) error {
 
 func (c *Client) getFromAddr(addr net.Addr, keys []string, cb func(*Item)) error {
 	return c.withAddrRw(addr, func(rw *bufio.ReadWriter) error {
-		if _, err := fmt.Fprintf(rw, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
+		getCommand := "gets"
+		if c.UseGet {
+			getCommand = "get"
+		}
+		if _, err := fmt.Fprintf(rw, "%s %s\r\n", getCommand, strings.Join(keys, " ")); err != nil {
 			return err
 		}
 		if err := rw.Flush(); err != nil {
